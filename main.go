@@ -2,8 +2,8 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"math/rand"
-	"os"
 
 	"github.com/miekg/dns"
 )
@@ -16,6 +16,7 @@ var (
 	}
 )
 
+// from https://gist.github.com/timothyandrew/c5d13b5957f1323ea775705ff9374ff1
 func resolve(name string) ([]dns.RR, error) {
 	nameserver := ROOT_NAMESERVERS[rand.Intn(len(ROOT_NAMESERVERS))]
 	c := new(dns.Client)
@@ -26,7 +27,6 @@ func resolve(name string) ([]dns.RR, error) {
 		m.SetQuestion(dns.Fqdn(name), dns.TypeA)
 
 		// Send the DNS request to the IP in `nameserver`
-		fmt.Printf("Asking %s about %s\n", nameserver, name)
 		resp, _, err := c.Exchange(m, fmt.Sprintf("%s:53", nameserver))
 		if err != nil {
 			return nil, err
@@ -70,23 +70,105 @@ func resolve(name string) ([]dns.RR, error) {
 
 		// ... and recurse!
 	}
+}
 
+func processTypeAAAA(q *dns.Question, requestMsg *dns.Msg) ([]dns.RR, error) {
+	answers, err := resolve(q.Name)
+	if err != nil {
+		return nil, err
+	}
+	if len(answers) == 0 {
+		return nil, fmt.Errorf("not found")
+	}
+
+	ret := []dns.RR{}
+	for _, answer := range answers {
+		// wrap IPv4 address for 4via6
+		a, ok := answer.(*dns.A)
+		if !ok {
+			continue
+		}
+
+		via6 := "fd7a:115c:a1e0:b1a:0:fe:" + a.A.String()
+		rr, err := dns.NewRR(fmt.Sprintf("%s 120 IN AAAA %s", q.Name, via6))
+		if err != nil {
+			continue
+		}
+
+		ret = append(ret, rr)
+	}
+
+	return ret, nil
+}
+
+func processOther(q *dns.Question, requestMsg *dns.Msg) ([]dns.RR, error) {
+	dnsServer := "8.8.8.8:53"
+	queryMsg := new(dns.Msg)
+	requestMsg.CopyTo(queryMsg)
+	queryMsg.Question = []dns.Question{*q}
+
+	dnsClient := new(dns.Client)
+	dnsClient.Net = "udp"
+	responseMsg, _, err := dnsClient.Exchange(queryMsg, dnsServer)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(responseMsg.Answer) > 0 {
+		return responseMsg.Answer, nil
+	}
+	return nil, fmt.Errorf("not found")
+}
+
+func getResponse(requestMsg *dns.Msg) (*dns.Msg, error) {
+	responseMsg := new(dns.Msg)
+	if len(requestMsg.Question) == 0 {
+		return responseMsg, nil
+	}
+	question := requestMsg.Question[0]
+
+	switch question.Qtype {
+	case dns.TypeAAAA:
+		answers, err := processTypeAAAA(&question, requestMsg)
+		if err != nil {
+			return responseMsg, err
+		}
+		for _, answer := range answers {
+			responseMsg.Answer = append(responseMsg.Answer, answer)
+		}
+
+	case dns.TypeA:
+		// no answer
+
+	default:
+		answers, err := processOther(&question, requestMsg)
+		if err != nil {
+			return responseMsg, err
+		}
+		for _, answer := range answers {
+			responseMsg.Answer = append(responseMsg.Answer, answer)
+		}
+	}
+
+	return responseMsg, nil
 }
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintf(os.Stderr, "usage: dns <name>\n")
-		os.Exit(1)
-	}
-
-	name := os.Args[1]
-	answer, err := resolve(name)
-	if err == nil {
-		for _, record := range answer {
-			fmt.Println(record)
+	dns.HandleFunc(".", func(w dns.ResponseWriter, r *dns.Msg) {
+		switch r.Opcode {
+		case dns.OpcodeQuery:
+			m, err := getResponse(r)
+			if err != nil {
+				log.Printf("Failed lookup for %s with error: %s\n", r, err.Error())
+			}
+			m.SetReply(r)
+			w.WriteMsg(m)
 		}
-	} else {
-		fmt.Fprintf(os.Stderr, "Failed to resolve %s\n", name)
-		os.Exit(1)
+	})
+
+	server := &dns.Server{Addr: "100.127.188.88:53", Net: "udp"}
+	err := server.ListenAndServe()
+	if err != nil {
+		log.Printf("Failed to start server: %s\n ", err.Error())
 	}
 }
