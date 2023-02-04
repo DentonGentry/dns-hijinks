@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"math/rand"
@@ -166,6 +167,9 @@ func getResponse(requestMsg *dns.Msg) (*dns.Msg, error) {
 }
 
 func main() {
+	ip := flag.String("dns-ip", "", "IP address to listen on for DNS packets")
+	flag.Parse()
+
 	dns.HandleFunc(".", func(w dns.ResponseWriter, r *dns.Msg) {
 		switch r.Opcode {
 		case dns.OpcodeQuery:
@@ -178,7 +182,7 @@ func main() {
 		}
 	})
 
-	server := &dns.Server{Addr: "100.127.188.88:53", Net: "udp"}
+	server := &dns.Server{Addr: *ip + ":53", Net: "udp"}
 	err := server.ListenAndServe()
 	if err != nil {
 		log.Printf("Failed to start server: %s\n ", err.Error())
