@@ -45,12 +45,19 @@ func resolve(name string) ([]dns.RR, error) {
 		// If the ADDITIONAL SECTION is empty and the AUTHORITY SECTION is not, resolve
 		// one of the names in the AUTHORITY SECTION and have that be the nameserver
 		if len(resp.Extra) == 0 && len(resp.Ns) != 0 {
-			ns := resp.Ns[0].(*dns.NS)
-			nsIP, err := resolve(ns.Ns)
-			if err != nil {
-				return nil, fmt.Errorf("break in the chain")
+			if ns, ok := resp.Ns[0].(*dns.NS); ok {
+				nsIP, err := resolve(ns.Ns)
+				if err != nil {
+					return nil, fmt.Errorf("break in the chain")
+				}
+				nameserver = nsIP[0].(*dns.A).A.String()
+			} else if soa, ok := resp.Ns[0].(*dns.SOA); ok {
+				nsIP, err := resolve(soa.Ns)
+				if err != nil {
+					return nil, fmt.Errorf("break in the chain")
+				}
+				nameserver = nsIP[0].(*dns.A).A.String()
 			}
-			nameserver = nsIP[0].(*dns.A).A.String()
 		} else {
 			// If an ADDITIONAL SECTION exists, look in it for an A record for the
 			// next-level nameserver. If one doesn't exist, we have to error out
@@ -95,6 +102,7 @@ func processTypeAAAA(q *dns.Question, requestMsg *dns.Msg) ([]dns.RR, error) {
 			continue
 		}
 
+		fmt.Printf("%s: %s\n", q.Name, via6)
 		ret = append(ret, rr)
 	}
 
@@ -129,6 +137,9 @@ func getResponse(requestMsg *dns.Msg) (*dns.Msg, error) {
 
 	switch question.Qtype {
 	case dns.TypeAAAA:
+		// When the client asks for a AAAA record, we look for an A record of the
+		// destination site and then encode it as the lower bits with our
+		// SaaS-Connector IPv6 prefix.
 		answers, err := processTypeAAAA(&question, requestMsg)
 		if err != nil {
 			return responseMsg, err
@@ -138,7 +149,8 @@ func getResponse(requestMsg *dns.Msg) (*dns.Msg, error) {
 		}
 
 	case dns.TypeA:
-		// no answer
+		// We cannot pass through the IPv4 address of the original site, we need
+		// the client to use IPv6. So we don't respond to A queries.
 
 	default:
 		answers, err := processOther(&question, requestMsg)
