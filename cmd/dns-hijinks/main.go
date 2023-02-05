@@ -49,13 +49,13 @@ func resolve(name string) ([]dns.RR, error) {
 			if ns, ok := resp.Ns[0].(*dns.NS); ok {
 				nsIP, err := resolve(ns.Ns)
 				if err != nil {
-					return nil, fmt.Errorf("break in the chain")
+					return nil, fmt.Errorf("no nameserver found")
 				}
 				nameserver = nsIP[0].(*dns.A).A.String()
 			} else if soa, ok := resp.Ns[0].(*dns.SOA); ok {
 				nsIP, err := resolve(soa.Ns)
 				if err != nil {
-					return nil, fmt.Errorf("break in the chain")
+					return nil, fmt.Errorf("no nameserver found")
 				}
 				nameserver = nsIP[0].(*dns.A).A.String()
 			}
@@ -72,7 +72,7 @@ func resolve(name string) ([]dns.RR, error) {
 				}
 			}
 			if !found {
-				return nil, fmt.Errorf("break in the chain")
+				return nil, fmt.Errorf("no nameserver found")
 			}
 		}
 
@@ -175,7 +175,7 @@ func main() {
 		case dns.OpcodeQuery:
 			m, err := getResponse(r)
 			if err != nil {
-				log.Printf("Failed lookup for %s with error: %s\n", r, err.Error())
+				fmt.Printf("%s: %s\n", r.Question[0].Name, err.Error())
 			}
 			m.SetReply(r)
 			w.WriteMsg(m)
